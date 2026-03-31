@@ -1,0 +1,27 @@
+{
+  "update_interval": 1.0,
+  "history_length": 60,
+  "temperature_unit": "celsius",
+  "network_unit": "MB",
+  "show_graphs": true,
+  "color_theme": "default",
+  "monitors": {
+    "cpu": true,
+    "memory": true,
+    "disk": true,
+    "network": true,
+    "battery": true,
+    "temperature": true,
+    "processes": true
+  },
+  "process_monitor": {
+    "top_n": 10,
+    "sort_by": "cpu"
+  },
+  "alerts": {
+    "cpu_threshold": 90,
+    "memory_threshold": 90,
+    "disk_threshold": 90,
+    "temperature_threshold": 85
+  }
+}
