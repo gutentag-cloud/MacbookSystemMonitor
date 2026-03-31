@@ -1,0 +1,10 @@
+
+### requirements.txt
+
+```txt
+psutil>=5.9.0
+rich>=13.0.0
+click>=8.0.0
+pyyaml>=6.0
+pandas>=1.5.0
+plotext>=5.0.0
