@@ -42,7 +42,7 @@ The monitor displays:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/macbook-monitor.git
+git clone https://github.com/gutentag-cloud/macbook-monitor.git
 cd macbook-monitor
 
 # Install dependencies
