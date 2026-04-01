@@ -77,6 +77,7 @@ class SystemMonitor:
         
         layout["right"].split_column(
             Layout(name="battery"),
+            Layout(name="sensors"),
             Layout(name="disk"),
             Layout(name="processes")
         )
@@ -123,12 +124,8 @@ class SystemMonitor:
         layout["disk"].update(self.disk.get_panel())
         layout["network"].update(self.network.get_panel())
         layout["battery"].update(self.battery.get_panel())
+        layout["sensors"].update(self.temperature.get_panel())
         layout["processes"].update(self.process.get_panel())
-        
-        # Add temperature info to CPU panel or separate if not minimal
-        temp_info = self.temperature.get_info()
-        if temp_info:
-            layout["cpu"].update(self.cpu.get_panel(temp_info))
         
         return layout
     
@@ -178,6 +175,8 @@ def main(interval, minimal, export):
         console.print("\n[yellow]Interrupted by user[/yellow]")
     except Exception as e:
         console.print(f"\n[bold red]Error: {e}[/bold red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
         sys.exit(1)
 
 
