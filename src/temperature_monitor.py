@@ -1,173 +1,188 @@
-"""Temperature and Sensor Monitoring Module"""
+"""Temperature and Sensor Monitoring Module """
 
 import subprocess
 import platform
 import re
+import json
 from rich.panel import Panel
 from rich.table import Table
 from rich import box
 
+# Try to import py-smc for Apple Silicon
+try:
+    from smc import SMCConnection
+    HAS_SMC = True
+except ImportError:
+    HAS_SMC = False
+
 
 class TemperatureMonitor:
-    """Monitor system temperatures and sensors"""
+    """Monitor system temperatures and sensors (M3 Mac compatible)"""
     
     def __init__(self):
         self.temperatures = {}
         self.fan_speeds = {}
         self.power_info = {}
-        self.supports_temp = self._check_temp_support()
-        self.supports_istats = self._check_istats_support()
-        self.supports_powermetrics = self._check_powermetrics_support()
-    
-    def _check_temp_support(self):
-        """Check if temperature monitoring is supported"""
-        if platform.system() != 'Darwin':
-            return False
+        self.thermal_pressure = None
+        self.chip_type = self._detect_chip()
+        self.supports_powermetrics = platform.system() == 'Darwin'
+        self.smc = None
         
-        # Check if osx-cpu-temp is installed
-        try:
-            subprocess.run(['which', 'osx-cpu-temp'], 
-                         capture_output=True, check=True, timeout=1)
-            return True
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return False
+        if HAS_SMC:
+            try:
+                self.smc = SMCConnection()
+            except Exception:
+                pass
     
-    def _check_istats_support(self):
-        """Check if iStats is installed (for fan speeds and more sensors)"""
-        if platform.system() != 'Darwin':
-            return False
-        
+    def _detect_chip(self):
+        """Detect if Mac is Apple Silicon or Intel"""
         try:
-            subprocess.run(['which', 'istats'], 
-                         capture_output=True, check=True, timeout=1)
-            return True
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return False
-    
-    def _check_powermetrics_support(self):
-        """Check if powermetrics is available (built-in macOS)"""
-        if platform.system() != 'Darwin':
-            return False
-        return True  # powermetrics is built into macOS
+            result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'],
+                                  capture_output=True, text=True, timeout=1)
+            if 'Apple' in result.stdout:
+                # Try to get specific chip
+                if 'M3' in result.stdout:
+                    return 'M3'
+                elif 'M2' in result.stdout:
+                    return 'M2'
+                elif 'M1' in result.stdout:
+                    return 'M1'
+                return 'Apple Silicon'
+            return 'Intel'
+        except Exception:
+            return 'Unknown'
     
     def update(self):
         """Update temperature and sensor readings"""
         self.temperatures = {}
         self.fan_speeds = {}
         self.power_info = {}
+        self.thermal_pressure = None
         
-        # Get basic CPU temperature
-        if self.supports_temp:
-            self._get_cpu_temp_basic()
+        # Method 1: Try SMC (most reliable for M3)
+        if self.smc:
+            self._get_smc_data()
         
-        # Get detailed sensors from iStats
-        if self.supports_istats:
-            self._get_istats_data()
-        
-        # Get power metrics (requires sudo for detailed info)
+        # Method 2: Try powermetrics (gives thermal pressure + power)
         if self.supports_powermetrics:
-            self._get_power_metrics()
-    
-    def _get_cpu_temp_basic(self):
-        """Get CPU temperature using osx-cpu-temp"""
-        try:
-            result = subprocess.run(['osx-cpu-temp'], 
-                                  capture_output=True, 
-                                  text=True, 
-                                  timeout=1)
-            
-            if result.returncode == 0:
-                temp_str = result.stdout.strip()
-                temp_value = float(temp_str.replace('°C', '').replace('°F', ''))
-                self.temperatures['CPU'] = temp_value
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError):
-            pass
-    
-    def _get_istats_data(self):
-        """Get detailed sensor data from iStats"""
-        try:
-            result = subprocess.run(['istats', '--no-graphs'], 
-                                  capture_output=True, 
-                                  text=True, 
-                                  timeout=2)
-            
-            if result.returncode == 0:
-                self._parse_istats_output(result.stdout)
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
-            pass
-    
-    def _parse_istats_output(self, output):
-        """Parse iStats output for various sensors"""
-        lines = output.split('\n')
+            self._get_powermetrics_data()
         
-        for line in lines:
-            line = line.strip()
-            
-            # CPU temperature (multiple sensors)
-            if 'CPU' in line and '°C' in line:
-                match = re.search(r'CPU.*?:\s*([\d.]+)°C', line)
-                if match:
-                    temp = float(match.group(1))
-                    # Extract specific CPU sensor name
-                    sensor_match = re.search(r'(CPU[^:]*)', line)
-                    sensor_name = sensor_match.group(1).strip() if sensor_match else 'CPU'
-                    self.temperatures[sensor_name] = temp
-            
-            # GPU temperature
-            if 'GPU' in line and '°C' in line:
-                match = re.search(r'([\d.]+)°C', line)
-                if match:
-                    self.temperatures['GPU'] = float(match.group(1))
-            
-            # Battery temperature
-            if 'Battery' in line and '°C' in line:
-                match = re.search(r'([\d.]+)°C', line)
-                if match:
-                    self.temperatures['Battery'] = float(match.group(1))
-            
-            # SSD/Disk temperature
-            if ('SSD' in line or 'Disk' in line or 'SMART' in line) and '°C' in line:
-                match = re.search(r'([\d.]+)°C', line)
-                if match:
-                    self.temperatures['SSD'] = float(match.group(1))
-            
-            # Ambient temperature
-            if 'Ambient' in line and '°C' in line:
-                match = re.search(r'([\d.]+)°C', line)
-                if match:
-                    self.temperatures['Ambient'] = float(match.group(1))
-            
-            # Fan speeds
-            if 'Fan' in line and 'RPM' in line:
-                match = re.search(r'Fan.*?(\d+)\s*RPM', line)
-                fan_num_match = re.search(r'Fan\s*(\d+)', line)
-                if match:
-                    rpm = int(match.group(1))
-                    fan_num = fan_num_match.group(1) if fan_num_match else '0'
-                    self.fan_speeds[f'Fan {fan_num}'] = rpm
-            
-            # Power/Wattage (if available)
-            if 'Power' in line and 'W' in line:
-                match = re.search(r'([\d.]+)\s*W', line)
-                if match:
-                    self.power_info['Power Draw'] = float(match.group(1))
+        # Method 3: Fallback to basic battery power
+        if not self.power_info:
+            self._get_battery_power()
     
-    def _get_power_metrics(self):
-        """Get power consumption data (basic, non-sudo version)"""
+    def _get_smc_data(self):
+        """Get sensor data from SMC (Apple Silicon compatible)"""
         try:
-            # This is a simplified version that doesn't require sudo
-            # For detailed metrics, user would need to run: sudo powermetrics -n 1
-            result = subprocess.run(['pmset', '-g', 'batt'], 
-                                  capture_output=True, 
-                                  text=True, 
-                                  timeout=1)
+            # Common SMC keys for temperature (vary by model)
+            temp_keys = [
+                'TC0P',  # CPU Proximity
+                'TC0D',  # CPU Die
+                'TC0E',  # CPU 1
+                'TC0F',  # CPU 2
+                'Tp0P',  # CPU Performance Core
+                'Te0P',  # CPU Efficiency Core
+                'TG0P',  # GPU Proximity
+                'TG0D',  # GPU Die
+                'TB0T',  # Battery
+                'Ts0P',  # Palm Rest
+                'TW0P',  # Airport (WiFi)
+            ]
             
-            if result.returncode == 0:
-                # Parse battery power info
-                match = re.search(r'(\d+)W', result.stdout)
-                if match:
-                    self.power_info['Battery Power'] = float(match.group(1))
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            sensor_names = {
+                'TC0P': 'CPU Proximity',
+                'TC0D': 'CPU Die',
+                'TC0E': 'CPU Core 1',
+                'TC0F': 'CPU Core 2',
+                'Tp0P': 'CPU P-Core',
+                'Te0P': 'CPU E-Core',
+                'TG0P': 'GPU Proximity',
+                'TG0D': 'GPU Die',
+                'TB0T': 'Battery',
+                'Ts0P': 'Palm Rest',
+                'TW0P': 'WiFi',
+            }
+            
+            for key in temp_keys:
+                try:
+                    value = self.smc.read_key(key)
+                    if value and value > 0:
+                        friendly_name = sensor_names.get(key, key)
+                        self.temperatures[friendly_name] = value
+                except Exception:
+                    continue
+            
+            # Try to get fan speeds
+            fan_keys = ['F0Ac', 'F1Ac']  # Actual fan speeds
+            for i, key in enumerate(fan_keys):
+                try:
+                    rpm = self.smc.read_key(key)
+                    if rpm and rpm > 0:
+                        self.fan_speeds[f'Fan {i}'] = int(rpm)
+                except Exception:
+                    continue
+                    
+        except Exception as e:
+            pass
+    
+    def _get_powermetrics_data(self):
+        """Get power and thermal data from powermetrics (M3 compatible)"""
+        try:
+            # Run powermetrics for 1 sample
+            result = subprocess.run(
+                ['sudo', 'powermetrics', '--samplers', 'cpu_power,gpu_power,thermal', 
+                 '-n', '1', '-i', '1000', '--format', 'plist'],
+                capture_output=True,
+                text=True,
+                timeout=3
+            )
+            
+            if result.returncode != 0:
+                # Try without sudo (limited data)
+                result = subprocess.run(
+                    ['powermetrics', '--samplers', 'thermal', 
+                     '-n', '1', '-i', '1000'],
+                    capture_output=True,
+                    text=True,
+                    timeout=3
+                )
+            
+            output = result.stdout
+            
+            # Parse thermal pressure
+            match = re.search(r'thermal_pressure:\s*(\d+)', output)
+            if match:
+                self.thermal_pressure = int(match.group(1))
+            
+            # Parse CPU power
+            match = re.search(r'CPU Power:\s*([\d.]+)\s*mW', output)
+            if match:
+                self.power_info['CPU'] = float(match.group(1)) / 1000  # Convert to Watts
+            
+            # Parse GPU power
+            match = re.search(r'GPU Power:\s*([\d.]+)\s*mW', output)
+            if match:
+                self.power_info['GPU'] = float(match.group(1)) / 1000
+            
+            # Parse combined power
+            match = re.search(r'Combined Power \(CPU \+ GPU\):\s*([\d.]+)\s*mW', output)
+            if match:
+                self.power_info['Total'] = float(match.group(1)) / 1000
+                
+        except Exception:
+            pass
+    
+    def _get_battery_power(self):
+        """Get basic power info from battery (fallback)"""
+        try:
+            result = subprocess.run(['pmset', '-g', 'batt'],
+                                  capture_output=True, text=True, timeout=1)
+            
+            # Parse for wattage or current
+            match = re.search(r'(\d+)W', result.stdout)
+            if match:
+                self.power_info['Battery Draw'] = float(match.group(1))
+        except Exception:
             pass
     
     def get_info(self):
@@ -175,28 +190,34 @@ class TemperatureMonitor:
         return {
             'temperatures': self.temperatures,
             'fans': self.fan_speeds,
-            'power': self.power_info
+            'power': self.power_info,
+            'thermal_pressure': self.thermal_pressure
         }
     
     def get_panel(self) -> Panel:
         """Generate sensor panel"""
-        if not self.supports_temp and not self.supports_istats:
-            return Panel(
-                "[yellow]⚠️  Advanced sensor monitoring not available[/yellow]\n\n"
-                "[dim]Install monitoring tools:[/dim]\n"
-                "[cyan]brew install osx-cpu-temp[/cyan]  (CPU temp)\n"
-                "[cyan]brew install iStats[/cyan]        (All sensors)",
-                title="[bold red]🌡️  Sensor Monitor[/bold red]",
-                border_style="red",
-                box=box.ROUNDED
-            )
-        
         table = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
         table.add_column("Sensor", style="cyan", width=18)
-        table.add_column("Value", style="green", width=15)
+        table.add_column("Value", style="green", width=20)
         
-        if not self.temperatures and not self.fan_speeds:
+        if not self.temperatures and not self.fan_speeds and not self.power_info:
             self.update()
+        
+        # Show chip type
+        table.add_row(
+            "[bold]💻 Chip[/bold]",
+            f"[cyan]{self.chip_type}[/cyan]"
+        )
+        
+        # Thermal pressure (M3 specific)
+        if self.thermal_pressure is not None:
+            color = self._get_pressure_color(self.thermal_pressure)
+            icon = self._get_pressure_icon(self.thermal_pressure)
+            table.add_row(
+                "[bold]🌡️  Thermal State[/bold]",
+                f"[{color}]{icon} {self.thermal_pressure}%[/{color}]"
+            )
+            table.add_row("", "")  # Spacer
         
         # Temperature sensors
         if self.temperatures:
@@ -212,7 +233,7 @@ class TemperatureMonitor:
         # Fan speeds
         if self.fan_speeds:
             table.add_row("", "")  # Spacer
-            table.add_row("[bold]💨 Fan Speeds[/bold]", "")
+            table.add_row("[bold]💨 Fans[/bold]", "")
             for fan, rpm in sorted(self.fan_speeds.items()):
                 color = self._get_fan_color(rpm)
                 icon = self._get_fan_icon(rpm)
@@ -225,19 +246,34 @@ class TemperatureMonitor:
         if self.power_info:
             table.add_row("", "")  # Spacer
             table.add_row("[bold]⚡ Power[/bold]", "")
-            for metric, value in self.power_info.items():
+            for component, watts in sorted(self.power_info.items()):
+                color = self._get_power_color(watts)
                 table.add_row(
-                    f"  {metric}",
-                    f"[yellow]{value:.1f} W[/yellow]"
+                    f"  {component}",
+                    f"[{color}]{watts:.2f} W[/{color}]"
                 )
         
+        # Show installation hint if no data
         if not self.temperatures and not self.fan_speeds and not self.power_info:
-            table.add_row("[yellow]No sensor data available[/yellow]", "")
-            table.add_row("[dim]Try: sudo python3 monitor.py[/dim]", "")
+            table.add_row("", "")
+            table.add_row(
+                "[yellow]⚠️  Limited Data[/yellow]",
+                ""
+            )
+            table.add_row(
+                "[dim]Install:[/dim]",
+                "[cyan]pip3 install py-smc[/cyan]"
+            )
+            table.add_row(
+                "[dim]Or run:[/dim]",
+                "[cyan]sudo python3 monitor.py[/cyan]"
+            )
+        
+        title = f"[bold red]🌡️  Sensors ({self.chip_type})[/bold red]"
         
         return Panel(
             table,
-            title="[bold red]🌡️  Sensor Monitor[/bold red]",
+            title=title,
             border_style="red",
             box=box.ROUNDED
         )
@@ -269,6 +305,30 @@ class TemperatureMonitor:
             return "🚨"
     
     @staticmethod
+    def _get_pressure_color(pressure):
+        """Get color based on thermal pressure"""
+        if pressure < 25:
+            return "green"
+        elif pressure < 50:
+            return "yellow"
+        elif pressure < 75:
+            return "orange1"
+        else:
+            return "red"
+    
+    @staticmethod
+    def _get_pressure_icon(pressure):
+        """Get icon based on thermal pressure"""
+        if pressure < 25:
+            return "✅"
+        elif pressure < 50:
+            return "⚠️"
+        elif pressure < 75:
+            return "🔥"
+        else:
+            return "🚨"
+    
+    @staticmethod
     def _get_fan_color(rpm):
         """Get color based on fan speed"""
         if rpm < 2000:
@@ -289,3 +349,15 @@ class TemperatureMonitor:
             return "🌪️"
         else:
             return "🌀"
+    
+    @staticmethod
+    def _get_power_color(watts):
+        """Get color based on power consumption"""
+        if watts < 10:
+            return "green"
+        elif watts < 20:
+            return "yellow"
+        elif watts < 30:
+            return "orange1"
+        else:
+            return "red"
