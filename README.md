@@ -48,7 +48,7 @@ cd MacbookSystemMonitor
 pip3 install -r requirements.txt
 
 # Run the monitor
-python3 monitor.py
+sudo python3 monitor.py
 ```
 
 ### Optional: Install system monitoring tools
