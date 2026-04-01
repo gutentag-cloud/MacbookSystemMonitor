@@ -54,11 +54,25 @@ python3 monitor.py
 ### Optional: Install system monitoring tools
 
 ```bash
-# For temperature monitoring (optional but recommended)
+
+#### Temperature & Sensor Monitoring (Highly Recommended)
+
+For comprehensive sensor monitoring including CPU/GPU temperature, fan speeds, and power consumption:
+
+```bash
+# Install osx-cpu-temp (lightweight, CPU temperature only)
 brew install osx-cpu-temp
 
-# For advanced sensors (optional)
-brew install iStats
+# Verify it works
+osx-cpu-temp
+# Should output: XX.X°C
+
+# Install iStats (comprehensive - CPU, GPU, battery temp, fans, etc.)
+sudo gem install iStats
+
+# Verify it works
+istats
+# Should show detailed sensor information
 ```
 
 ## Usage
