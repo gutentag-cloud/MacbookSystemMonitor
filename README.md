@@ -41,15 +41,14 @@ The monitor displays:
 ### Quick Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/gutentag-cloud/macbook-monitor.git
-cd macbook-monitor
+git clone https://github.com/gutentag-cloud/MacbookSystemMonitor.git
+cd MacbookSystemMonitor
 
 # Install dependencies
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 
 # Run the monitor
-python monitor.py
+python3 monitor.py
 ```
 
 ### Optional: Install system monitoring tools
